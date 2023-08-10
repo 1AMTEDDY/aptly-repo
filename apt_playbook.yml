@@ -12,7 +12,7 @@
   - name: Perform ACME challenge
     become: yes
     shell:
-      cmd: certbot certonly --standalone -d teddy.io -n --agree-tos --email=devops@oxefit.com
+      cmd: certbot certonly --standalone -d teddy.io -n --agree-tos --email=devops@teddy.io
       creates: /etc/letsencrypt/live/teddy.io/privkey.pem
   - name: Install GnuPG and configure keys
     hosts: apt_host
