@@ -26,7 +26,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
   admin_username      = var.admin_user
 
   network_interface_ids = [
-    azurerm_network_interface.nic-pri.id
+    azurerm_network_interface.nic-1.id
     ]
 
   admin_ssh_key {
