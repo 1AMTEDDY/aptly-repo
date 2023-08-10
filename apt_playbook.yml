@@ -39,7 +39,7 @@
 
       - name: Check for existing PGP key
         shell:
-          cmd: gpg --list-keys devops@oxefit.com
+          cmd: gpg --list-keys devops@teddy.io
         register: teddy_gpg
         ignore_errors: yes
 
