@@ -1,0 +1,198 @@
+---
+  - name: Install certbot and aquire SSL certificates
+    hosts: apt_host
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    tasks:
+      - name: Install certbot
+        become: yes
+        apt:
+          name: certbot
+          update_cache: yes
+  - name: Perform ACME challenge
+    become: yes
+    shell:
+      cmd: certbot certonly --standalone -d teddy.io -n --agree-tos --email=devops@oxefit.com
+      creates: /etc/letsencrypt/live/teddy.io/privkey.pem
+  - name: Install GnuPG and configure keys
+    hosts: apt_host
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+
+    tasks:
+      - name: Install packages
+        apt:
+          name: gnupg2
+          update_cache: yes
+        become: true
+        become_method: sudo
+
+      - name: Create gpg config directory
+        file:
+          path: $HOME/.gnupg
+          state: directory
+
+      - name: Copy gpg config to host
+        copy:
+          src: config/gpg.conf
+          dest: $HOME/.gnupg/gpg.conf
+
+      - name: Check for existing PGP key
+        shell:
+          cmd: gpg --list-keys devops@oxefit.com
+        register: teddy_gpg
+        ignore_errors: yes
+
+      - name: Create PGP destination directory
+        file:
+          path: $HOME/pgp
+          state: directory
+        when: teddy_gpg.failed
+
+      - name: Unzip PGP keys
+        unarchive:
+          src: "{{ pgp_keys_zip }}"
+          dest: $HOME/pgp/
+        when: teddy_gpg.failed
+
+      - name: Import keys
+        shell: |
+          gpg --batch --import privatekeys.asc
+          gpg --import pubkeys.asc
+          gpg --import-ownertrust otrust.txt
+        args:
+          chdir: $HOME/pgp/
+        when: teddy_gpg.failed
+
+      - name: Cleanup copied PGP keys
+        file:
+          path: $HOME/pgp
+          state: absent
+        when: teddy_gpg.failed
+
+      - name: Create passphrase directory
+        file:
+          path: /etc/keys
+          state: directory
+        become: true
+        become_method: sudo
+
+      - name: Copy PGP passphrase file to remote
+        template:
+          src: config/pgp-passphrase.j2
+          dest: /etc/keys/pgp
+        become: true
+        become_method: sudo
+
+      - name: Check for exported PGP key
+        file:
+          path: /mnt/apt/oxefit.gpg
+        register: exported_key
+        ignore_errors: yes
+
+      - name: Export public key
+        shell:
+          cmd: gpg --output teddy.gpg --armor --export devops@teddy.io
+          chdir: /mnt/apt
+        when: exported_key.failed
+        become: true
+        become_method: sudo
+
+  - name: Install and configure aptly
+    hosts: apt_host
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+
+    tasks:
+      - name: Add aptly repository
+        apt_repository:
+          repo: deb http://repo.aptly.info/ squeeze main
+          update_cache: no
+        become: true
+        become_method: sudo
+
+      - name: Add aptly apt key
+        apt_key:
+          keyserver: keyserver.ubuntu.com
+          id: A0546A43624A8331
+        become: true
+        become_method: sudo
+
+      - name: Install packages
+        apt:
+          name: aptly
+          update_cache: yes
+        become: true
+        become_method: sudo
+
+      - name: Copy aptly config to host
+        copy:
+          src: config/aptly.conf
+          dest: /etc/aptly.conf
+        become: true
+        become_method: sudo
+
+      - name: Create aptly root directory
+        file:
+          path: /mnt/apt/aptly
+          state: directory
+          owner: '1000'
+          group: '1000'
+        become: true
+        become_method: sudo
+
+  - name: Install and configure nginx
+    hosts: apt_host
+    become: true
+    become_method: sudo
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+      nginx_config_file: config/apt-nginx.conf.j2
+      apt_password: pa55w0rd
+      apt_password_sand: supersecret
+
+    tasks:
+      - name: Install nginx
+        apt:
+          name: nginx
+          update_cache: yes
+
+
+      - name: Copy nginx config
+        template:
+          src: "{{ nginx_config_file }}"
+          dest: /etc/nginx/sites-available/apt
+        register: nginx_config
+
+      - name: Check if nginx password file exists
+        stat:
+          path: /etc/nginx/.htpasswd
+        register: htpasswd
+
+      - name: Create .htpasswd file
+        shell: |
+          echo -n "teddy:" > /etc/nginx/.htpasswd
+          echo -n {{ apt_password }} | openssl passwd -apr1 -salt {{ apt_password_sand }} -stdin >> /etc/nginx/.htpasswd
+        become: true
+        when: (nginx_config_file == "config/apt-nginx-prod.conf.j2") and (htpasswd.stat.exists == False)
+
+      - name: Create config symlink
+        file:
+          path: /etc/nginx/sites-enabled/apt
+          src: /etc/nginx/sites-available/apt
+          state: link
+        register: nginx_config_link
+
+      - name: Reload nginx service
+        systemd:
+          name: nginx
+          state: reloaded
+        when:  (nginx_config.changed) or (nginx_config_link.changed)
+      - name: Configure post renewal hook
+        become: yes
+        copy:
+          src: letsencrypt/renewal-hooks/post/
+          dest: /etc/letsencrypt/renewal-hooks/post/
+          owner: root
+          group: root
+          mode: u+x,g+x

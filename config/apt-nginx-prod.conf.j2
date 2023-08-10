@@ -1,0 +1,25 @@
+server {
+    listen 80;
+    listen [::]:80;
+
+    listen 443 ssl;
+    ssl_certificate /etc/ssl/certs/{{ cert_name }}.crt;
+    ssl_certificate_key /etc/ssl/private/{{ cert_name }}.key;
+
+    server_name {{ sitename }};
+    root /mnt/apt;
+    allow all;
+    autoindex on;
+
+    location /public {
+        alias /mnt/apt/aptly/public;
+        auth_basic "Restricted Apt Repo";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+    }
+
+    location / {
+        allow all;
+        auth_basic "Restricted Apt Repo";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+    }
+}

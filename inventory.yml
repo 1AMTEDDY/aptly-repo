@@ -1,0 +1,4 @@
+all:
+  hosts:
+    apt_host:
+      ansible_host: $Ansible_host

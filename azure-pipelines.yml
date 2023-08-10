@@ -1,0 +1,102 @@
+parameters:
+  - name: azureSubscription
+    displayName: Azure connected service name
+    type: string
+    default: Teddy Azure Subscription
+  - name:    environment
+    default: Production
+  - name:   pgpKeyPassphrase
+    default:  $(PgpKeyPassphrase)
+  - name:    sitename
+    default: apt.teddy.io
+  - name:   nginxConfigFile
+    default: config/apt-nginx-prod.conf.j2
+  - name:   aptPassword
+    default: $(AptPassword)
+  - name:    aptPasswordSand
+    default: $(AptPasswordSand)
+trigger:
+- none
+
+
+
+resources:
+  repositories:
+    - repository: AzurePipelineTemplates
+      type: git
+      name: AzurePipelineTemplates
+      ref: refs/tags/3.1.0
+      trigger:
+        branches:
+          exclude:
+            - '*'
+        tags:
+          exclude:
+            - '*'
+
+steps:
+- checkout: AzurePipelineTemplates
+
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: $SUBCRIPTION
+    addSpnToEnvironment: true
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      echo "##vso[task.setvariable variable=ARM_SUBSCRIPTION_ID]$(az account show --query="id" -o tsv)"
+      echo "##vso[task.setvariable variable=ARM_CLIENT_ID]${servicePrincipalId}"
+      echo "##vso[task.setvariable variable=ARM_CLIENT_SECRET]${servicePrincipalKey}"
+      echo "##vso[task.setvariable variable=ARM_TENANT_ID]${tenantId}"
+
+
+- task: DownloadSecureFile@1
+  displayName: Download private SSH key
+  name: privateKey
+  inputs:
+   secureFile: teddy
+- task: DownloadSecureFile@1
+  displayName: Download PGP keys
+  name: pgpKeys
+  inputs:
+   secureFile: teddy_pgp.tar.gz
+
+- script: |
+   pip install ansible[azure]
+   ansible-galaxy collection install azure.azcollection
+  displayName: 'Install Ansible and the Azure modules'
+
+- checkout: self
+  fetchTags: "true"
+
+- task: Bash@3
+  displayName: Run deploy Ansible playbook
+  env:
+    AZURE_CLIENT_ID: $(ARM_CLIENT_ID)
+    AZURE_SECRET: $(ARM_CLIENT_SECRET)
+    AZURE_TENANT: $(ARM_TENANT_ID)
+    AZURE_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+    ANSIBLE_HOST_KEY_CHECKING: False
+  inputs:
+   targetType: inline
+   script: |
+       chmod 400 $(privateKey.secureFilePath)
+
+                ANSIBLE_LOCALHOST_WARNING=False \
+                ANSIBLE_INVENTORY_UNPARSED_WARNING=False \
+                ansible-playbook \
+                  --timeout 60 \
+                  -u teddy \
+                  -i "$(System.DefaultWorkingDirectory)/aptly-repo/inventory.yml" \
+                  --private-key "$(privateKey.secureFilePath)" \
+                  -e "key_passphrase=${{ parameters.pgpKeyPassphrase }}" \
+                  -e "pgp_keys_zip=$(pgpKeys.secureFilePath)" \
+                  -e "sitename=${{ parameters.sitename }}" \
+                  -e "nginx_config_file=${{ parameters.nginxConfigFile }}" \
+                  -e apt_password=${{ parameters.aptPassword }} \
+                  -e apt_password_sand=${{ parameters.aptPasswordSand }} \
+                  "$(System.DefaultWorkingDirectory)/aptly-repo/apt_playbook.yml"
+
+
+
+
